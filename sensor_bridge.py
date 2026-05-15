@@ -4,7 +4,7 @@ import argparse
 import re
 import time
 from collections import deque
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, List
 
 import requests
 import serial
@@ -50,10 +50,18 @@ def main() -> None:
         help="Number of initial temperature samples to build baseline",
     )
     parser.add_argument("--timeout", type=float, default=2.0, help="HTTP timeout seconds")
+    parser.add_argument(
+        "--window-seconds",
+        type=float,
+        default=10.0,
+        help="Aggregate samples for this many seconds, then predict once",
+    )
     args = parser.parse_args()
 
     temp_window: deque[float] = deque(maxlen=max(5, args.baseline_samples))
     baseline_temp: Optional[float] = None
+    sample_buffer: List[Dict[str, Any]] = []
+    window_start_ts: Optional[float] = None
 
     print(f"[bridge] opening serial {args.port} @ {args.baud}")
     with serial.Serial(args.port, args.baud, timeout=1) as ser:
@@ -81,10 +89,23 @@ def main() -> None:
                     )
                     continue
 
-                temp_delta = parsed["skin_temperature"] - baseline_temp
+                now = time.time()
+                if window_start_ts is None:
+                    window_start_ts = now
+                sample_buffer.append(parsed)
+                elapsed = now - window_start_ts
+                if elapsed < args.window_seconds:
+                    continue
+
+                # Aggregate window then predict once.
+                bpm_avg = sum(x["bpm"] for x in sample_buffer) / len(sample_buffer)
+                skin_temp_avg = sum(x["skin_temperature"] for x in sample_buffer) / len(sample_buffer)
+                humidity_avg = sum(x["humidity"] for x in sample_buffer) / len(sample_buffer)
+                ir_avg = int(sum(x["ir"] for x in sample_buffer) / len(sample_buffer))
+                temp_delta = skin_temp_avg - baseline_temp
                 model_input = {
-                    "bpm": round(parsed["bpm"], 3),
-                    "skin_temperature": round(parsed["skin_temperature"], 3),
+                    "bpm": round(bpm_avg, 3),
+                    "skin_temperature": round(skin_temp_avg, 3),
                     "temperature_delta": round(temp_delta, 3),
                 }
 
@@ -95,21 +116,24 @@ def main() -> None:
                 output = {
                     "timestamp": int(time.time()),
                     "sensor": {
-                        "bpm": parsed["bpm"],
-                        "skin_temperature": parsed["skin_temperature"],
-                        "humidity": parsed["humidity"],
-                        "ir": parsed["ir"],
-                        "stress_device": parsed["stress_device"],
+                        "bpm": round(bpm_avg, 3),
+                        "skin_temperature": round(skin_temp_avg, 3),
+                        "humidity": round(humidity_avg, 3),
+                        "ir": ir_avg,
+                        "stress_device": sample_buffer[-1]["stress_device"],
                         "temperature_delta": model_input["temperature_delta"],
                         "baseline_temperature": round(baseline_temp, 3),
+                        "window_seconds": args.window_seconds,
+                        "window_samples": len(sample_buffer),
                     },
                     "model_prediction": pred,
                 }
 
                 print(
                     "[bridge] "
-                    f"BPM={parsed['bpm']:.2f} Temp={parsed['skin_temperature']:.2f} "
+                    f"BPM={bpm_avg:.2f} Temp={skin_temp_avg:.2f} "
                     f"Delta={model_input['temperature_delta']:.2f} | "
+                    f"window={args.window_seconds:.1f}s samples={len(sample_buffer)} | "
                     f"Model label={pred.get('label')} risk={pred.get('risk_score')}"
                 )
 
@@ -117,6 +141,10 @@ def main() -> None:
                     fw_resp = requests.post(args.forward_url, json=output, timeout=args.timeout)
                     fw_resp.raise_for_status()
                     print(f"[bridge] forwarded to {args.forward_url}")
+
+                # Reset window
+                sample_buffer = []
+                window_start_ts = None
 
             except requests.RequestException as exc:
                 print(f"[bridge] http error: {exc}")
@@ -129,4 +157,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
