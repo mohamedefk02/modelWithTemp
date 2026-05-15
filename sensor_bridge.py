@@ -56,6 +56,15 @@ def main() -> None:
         default=10.0,
         help="Aggregate samples for this many seconds, then predict once",
     )
+    parser.add_argument("--min-bpm", type=float, default=45.0, help="Minimum plausible BPM to accept")
+    parser.add_argument("--max-bpm", type=float, default=180.0, help="Maximum plausible BPM to accept")
+    parser.add_argument("--min-ir", type=int, default=50000, help="Minimum IR signal to accept sample")
+    parser.add_argument(
+        "--min-valid-samples",
+        type=int,
+        default=20,
+        help="Minimum number of valid samples required per window before predicting",
+    )
     args = parser.parse_args()
 
     temp_window: deque[float] = deque(maxlen=max(5, args.baseline_samples))
@@ -74,6 +83,12 @@ def main() -> None:
 
                 parsed = parse_sensor_line(raw)
                 if not parsed:
+                    continue
+
+                # Filter weak/noisy samples before baseline/prediction logic.
+                if parsed["ir"] < args.min_ir:
+                    continue
+                if parsed["bpm"] < args.min_bpm or parsed["bpm"] > args.max_bpm:
                     continue
 
                 temp_window.append(parsed["skin_temperature"])
@@ -95,6 +110,15 @@ def main() -> None:
                 sample_buffer.append(parsed)
                 elapsed = now - window_start_ts
                 if elapsed < args.window_seconds:
+                    continue
+
+                if len(sample_buffer) < args.min_valid_samples:
+                    print(
+                        f"[bridge] skipped window: only {len(sample_buffer)} valid samples "
+                        f"(min required {args.min_valid_samples})"
+                    )
+                    sample_buffer = []
+                    window_start_ts = None
                     continue
 
                 # Aggregate window then predict once.

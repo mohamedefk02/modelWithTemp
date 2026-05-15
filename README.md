@@ -84,6 +84,10 @@ Run backend first, then run:
 
 ```bash
 python sensor_bridge.py --port COM5 --baud 115200 --predict-url http://127.0.0.1:8000/predict
+
+
+ python sensor_bridge.py --port COM4 --baud 115200 --predict-url http://127.0.0.1:8000/predict --window-seconds 10 --min-bpm 45 --max-bpm 180 --min-ir 50000 --min-valid-samples 20
+
 ```
 
 Optional forward to another API:
