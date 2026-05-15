@@ -1,0 +1,16 @@
+# Python cache / env
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Trained model artifacts
+models/*.joblib
+
+# Generated datasets and split outputs
+data/stability_splits/
+data/processed/
+data/wesad_features.csv
+data/test_tricky.csv
+data/
+*.csv
