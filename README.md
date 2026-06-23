@@ -1,41 +1,59 @@
 # Physiological Risk Scoring API
 
-## Setup
+A FastAPI-based risk scoring service for physiological sensor data. This repository includes tools to train and evaluate a binary stress detection model using WESAD-derived features, synthetic stress-like data generation, and an ESP32 serial bridge for live predictions.
+
+## Features
+
+- Train a risk scoring model from CSV datasets
+- Benchmark using k-fold cross-validation
+- Test on holdout datasets
+- Strict evaluation with subject-aware splitting and overlap removal
+- Real-time bridged predictions from ESP32 sensor serial data
+- Synthetic WESAD-like dataset generation for model experimentation
+
+## Repository Structure
+
+- `app.py` - FastAPI application and request handlers
+- `risk_service.py` - model training, evaluation, benchmarking, and prediction logic
+- `sensor_bridge.py` - serial bridge for ESP32 sensor output to `/predict`
+- `prepare_wesad.py` - convert raw WESAD pickle data into CSV training features
+- `generate_wesad_like_data.py` - generate synthetic WESAD-like CSV datasets
+- `data/` - sample datasets and generated outputs
+- `models/` - saved `risk_model.joblib`
+
+## Requirements
+
+Install Python dependencies:
 
 ```bash
 python -m venv .venv
-.venv\\Scripts\\activate
+.venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
-## Build Real Training Data (WESAD)
+## Run the API
 
-1. Download and extract WESAD so folders look like `.../WESAD/S2/S2.pkl`, `.../WESAD/S3/S3.pkl`, etc.
-2. Run:
-
-```bash
-python prepare_wesad.py --wesad-root "C:/path/to/WESAD" --output data/wesad_features.csv --window-sec 60 --step-sec 10
-```
-
-This creates CSV with schema:
-`subject_id,bpm,skin_temperature,temperature_delta,label`
-
-## Run API
+Start the FastAPI server:
 
 ```bash
 uvicorn app:app --host 0.0.0.0 --port 8000 --reload
 ```
 
-## Endpoints
+The API will be available at `http://127.0.0.1:8000`.
 
-- `GET /` -> health check
-- `POST /train`
-- `POST /benchmark`
-- `POST /test`
-- `POST /predict`
-- `POST /batch_predict`
+## API Endpoints
 
-## Example Train Request
+- `GET /` - health check
+- `POST /train` - train the risk model
+- `POST /benchmark` - run k-fold benchmark
+- `POST /test` - evaluate on a test dataset
+- `POST /strict_evaluate` - strict subject-aware evaluation
+- `POST /predict` - single-sample prediction
+- `POST /batch_predict` - batch prediction for multiple samples
+
+## Example Requests
+
+### Train
 
 ```json
 {
@@ -43,7 +61,7 @@ uvicorn app:app --host 0.0.0.0 --port 8000 --reload
 }
 ```
 
-## Example Predict Request
+### Predict
 
 ```json
 {
@@ -53,7 +71,7 @@ uvicorn app:app --host 0.0.0.0 --port 8000 --reload
 }
 ```
 
-## Example Benchmark Request
+### Benchmark
 
 ```json
 {
@@ -62,7 +80,7 @@ uvicorn app:app --host 0.0.0.0 --port 8000 --reload
 }
 ```
 
-## Example Test Request
+### Test
 
 ```json
 {
@@ -70,28 +88,92 @@ uvicorn app:app --host 0.0.0.0 --port 8000 --reload
 }
 ```
 
-## Notes
+### Strict Evaluate
 
-- Model uses missing-value handling (`SimpleImputer`) and normalization (`StandardScaler`).
-- Candidate models: Random Forest, Logistic Regression, optional XGBoost.
-- Risk score is computed as `probability_of_class_1 * 100`.
-- Saved model path: `models/risk_model.joblib`.
-- WESAD mapping used by converter: stress label `2 -> 1`, baseline/amusement/meditation (`1/3/4 -> 0`).
+```json
+{
+  "train_dataset_path": "data/processed/wesad_like_train.csv",
+  "test_dataset_path": "data/test.csv",
+  "cv_folds": 5,
+  "subject_column": "subject_id",
+  "drop_overlap": false,
+  "tune_threshold_for_recall": true,
+  "target_recall": 0.9
+}
+```
+
+### Batch Predict
+
+```json
+{
+  "data": [
+    {"bpm": 80, "skin_temperature": 36.0, "temperature_delta": -0.1},
+    {"bpm": 95, "skin_temperature": 36.8, "temperature_delta": 0.3}
+  ]
+}
+```
+
+## Generate Training Data
+
+### Convert WESAD data
+
+Prepare real WESAD-derived features from raw pickle files:
+
+```bash
+python prepare_wesad.py --wesad-root "C:/path/to/WESAD" --output data/wesad_features.csv --window-sec 60 --step-sec 10
+```
+
+The output CSV includes:
+
+- `subject_id`
+- `bpm`
+- `skin_temperature`
+- `temperature_delta`
+- `label`
+
+Stress is mapped to `label = 1` and baseline/amusement/meditation is mapped to `label = 0`.
+
+### Create synthetic WESAD-like data
+
+```bash
+python generate_wesad_like_data.py --output data/processed/wesad_like_train.csv --target-mb 200
+```
 
 ## ESP32 Sensor Bridge
 
-Run backend first, then run:
+Use `sensor_bridge.py` to stream serial sensor readings to the model prediction endpoint.
 
 ```bash
 python sensor_bridge.py --port COM5 --baud 115200 --predict-url http://127.0.0.1:8000/predict
-
-
- python sensor_bridge.py --port COM4 --baud 115200 --predict-url http://127.0.0.1:8000/predict --window-seconds 10 --min-bpm 45 --max-bpm 180 --min-ir 50000 --min-valid-samples 20
-
 ```
 
-Optional forward to another API:
+Optional advanced bridge command:
+
+```bash
+python sensor_bridge.py \
+  --port COM4 \
+  --baud 115200 \
+  --predict-url http://127.0.0.1:8000/predict \
+  --window-seconds 10 \
+  --min-bpm 45 \
+  --max-bpm 180 \
+  --min-ir 50000 \
+  --min-valid-samples 20
+```
+
+Forward predictions to another API:
 
 ```bash
 python sensor_bridge.py --port COM5 --baud 115200 --predict-url http://127.0.0.1:8000/predict --forward-url http://127.0.0.1:9000/ingest
 ```
+
+## Notes
+
+- The model pipeline uses `SimpleImputer` and `StandardScaler` for preprocessing.
+- Candidate models include Random Forest and Logistic Regression, with optional XGBoost when installed.
+- The saved model file is `models/risk_model.joblib`.
+- `risk_service.py` validates required feature columns before training or prediction.
+
+## License
+
+This repository does not include a license file. Add one if you want to share or publish this project.
