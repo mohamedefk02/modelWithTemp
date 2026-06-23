@@ -174,6 +174,3 @@ python sensor_bridge.py --port COM5 --baud 115200 --predict-url http://127.0.0.1
 - The saved model file is `models/risk_model.joblib`.
 - `risk_service.py` validates required feature columns before training or prediction.
 
-## License
-
-This repository does not include a license file. Add one if you want to share or publish this project.
